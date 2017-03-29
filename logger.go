@@ -26,31 +26,32 @@ func NewLogger() Logger {
 }
 
 func (l *logger) Info(format string, args ...interface{}) {
-	l.printWithHeader("       ", format, args...)
+	l.printWithHeader(none, "       ", format, args...)
 }
 
 func (l *logger) Warning(format string, args ...interface{}) {
-	l.printWithHeader("       **WARNING** ", format, args...)
+	l.printWithHeader(yellow, "       **WARNING** ", format, args...)
 
 }
 func (l *logger) Error(format string, args ...interface{}) {
-	l.printWithHeader("       **ERROR** ", format, args...)
+	l.printWithHeader(red, "       **ERROR** ", format, args...)
 }
 
 func (l *logger) BeginStep(format string, args ...interface{}) {
-	l.printWithHeader("-----> ", format, args...)
+	l.printWithHeader(none, "-----> ", format, args...)
 }
 
 func (l *logger) Protip(tip string, helpURL string) {
-	l.printWithHeader("       PRO TIP: ", "%s", tip)
-	l.printWithHeader("       Visit ", "%s", helpURL)
+	l.printWithHeader(none, "       PRO TIP: ", "%s", tip)
+	l.printWithHeader(none, "       Visit ", "%s", helpURL)
 }
 
-func (l *logger) printWithHeader(header string, format string, args ...interface{}) {
+func (l *logger) printWithHeader(color func(string) string, header string, format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 
 	msg = strings.Replace(msg, "\n", "\n       ", -1)
-	fmt.Fprintf(l.w, "%s%s\n", header, msg)
+	uncolored := fmt.Sprintf("%s%s\n", header, msg)
+	fmt.Fprintf(l.w, color(uncolored))
 }
 
 func (l *logger) GetOutput() io.Writer {
@@ -59,6 +60,18 @@ func (l *logger) GetOutput() io.Writer {
 
 func (l *logger) SetOutput(w io.Writer) {
 	l.w = w
+}
+
+func red(uncolored string) string {
+	return fmt.Sprintf("\033[31;1m%s\033[0m", uncolored)
+}
+
+func yellow(uncolored string) string {
+	return fmt.Sprintf("\033[33;1m%s\033[0m", uncolored)
+}
+
+func none(uncolored string) string {
+	return uncolored
 }
 
 var Log = &logger{w: os.Stdout}
