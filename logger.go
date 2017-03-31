@@ -21,37 +21,45 @@ type logger struct {
 	w io.Writer
 }
 
+var msgPrefix, msgError, msgWarning, msgProtip string
+
+func init() {
+	msgPrefix = "       "
+	msgError = msgPrefix + red("**ERROR**")
+	msgWarning = msgPrefix + red("**WARNING**")
+	msgProtip = msgPrefix + blue("PRO TIP:")
+}
+
 func NewLogger() Logger {
 	return &logger{w: os.Stdout}
 }
 
 func (l *logger) Info(format string, args ...interface{}) {
-	l.printWithHeader(none, "       ", format, args...)
+	l.printWithHeader("      ", format, args...)
 }
 
 func (l *logger) Warning(format string, args ...interface{}) {
-	l.printWithHeader(yellow, "       **WARNING** ", format, args...)
+	l.printWithHeader(msgWarning, format, args...)
 
 }
 func (l *logger) Error(format string, args ...interface{}) {
-	l.printWithHeader(red, "       **ERROR** ", format, args...)
+	l.printWithHeader(msgError, format, args...)
 }
 
 func (l *logger) BeginStep(format string, args ...interface{}) {
-	l.printWithHeader(none, "-----> ", format, args...)
+	l.printWithHeader("----->", format, args...)
 }
 
 func (l *logger) Protip(tip string, helpURL string) {
-	l.printWithHeader(none, "       PRO TIP: ", "%s", tip)
-	l.printWithHeader(none, "       Visit ", "%s", helpURL)
+	l.printWithHeader(msgProtip, "%s", tip)
+	l.printWithHeader(msgPrefix+"Visit", "%s", helpURL)
 }
 
-func (l *logger) printWithHeader(color func(string) string, header string, format string, args ...interface{}) {
+func (l *logger) printWithHeader(header string, format string, args ...interface{}) {
 	msg := fmt.Sprintf(format, args...)
 
 	msg = strings.Replace(msg, "\n", "\n       ", -1)
-	uncolored := fmt.Sprintf("%s%s\n", header, msg)
-	fmt.Fprintf(l.w, color(uncolored))
+	fmt.Fprintf(l.w, "%s %s\n", header, msg)
 }
 
 func (l *logger) GetOutput() io.Writer {
@@ -70,8 +78,8 @@ func yellow(uncolored string) string {
 	return fmt.Sprintf("\033[33;1m%s\033[0m", uncolored)
 }
 
-func none(uncolored string) string {
-	return uncolored
+func blue(uncolored string) string {
+	return fmt.Sprintf("\033[34;1m%s\033[0m", uncolored)
 }
 
 var Log = &logger{w: os.Stdout}
