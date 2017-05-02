@@ -148,7 +148,7 @@ var _ = Describe("Stager", func() {
 			contents, err := ioutil.ReadFile(filepath.Join(s.DepDir(), "config.yml"))
 			Expect(err).To(BeNil())
 
-			Expect(string(contents)).To(Equal("config: null\nname: dotnet-core\n"))
+			Expect(string(contents)).To(Equal("config: {}\nname: dotnet-core\n"))
 		})
 
 		It("writes passed config struct to file", func() {

@@ -73,6 +73,9 @@ func (s *Stager) DepDir() string {
 }
 
 func (s *Stager) WriteConfigYml(config interface{}) error {
+	if config == nil {
+		config = map[interface{}]interface{}{}
+	}
 	data := map[string]interface{}{"name": s.Manifest.Language(), "config": config}
 	return NewYAML().Write(filepath.Join(s.DepDir(), "config.yml"), data)
 }
