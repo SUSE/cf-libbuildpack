@@ -22,6 +22,7 @@ var _ = Describe("Stager", func() {
 		cacheDir    string
 		depsDir     string
 		depsIdx     string
+		profileDir  string
 		logger      *libbuildpack.Logger
 		s           *libbuildpack.Stager
 		err         error
@@ -44,6 +45,9 @@ var _ = Describe("Stager", func() {
 		err = os.MkdirAll(filepath.Join(depsDir, depsIdx), 0755)
 		Expect(err).To(BeNil())
 
+		profileDir, err = ioutil.TempDir("", "profiled")
+		Expect(err).To(BeNil())
+
 		manifestDir = filepath.Join("fixtures", "manifest", "standard")
 
 		manifest, err = libbuildpack.NewManifest(manifestDir, logger, time.Now())
@@ -53,7 +57,7 @@ var _ = Describe("Stager", func() {
 
 		logger = libbuildpack.NewLogger(buffer)
 
-		s = libbuildpack.NewStager([]string{buildDir, cacheDir, depsDir, depsIdx}, logger, manifest)
+		s = libbuildpack.NewStager([]string{buildDir, cacheDir, depsDir, depsIdx, profileDir}, logger, manifest)
 	})
 
 	AfterEach(func() {
@@ -64,6 +68,9 @@ var _ = Describe("Stager", func() {
 		Expect(err).To(BeNil())
 
 		err = os.RemoveAll(depsDir)
+		Expect(err).To(BeNil())
+
+		err = os.RemoveAll(profileDir)
 		Expect(err).To(BeNil())
 	})
 
@@ -79,6 +86,7 @@ var _ = Describe("Stager", func() {
 				Expect(s.CacheDir()).To(Equal("cacheDir"))
 				Expect(s.DepsIdx()).To(Equal("idx"))
 				Expect(s.DepDir()).To(Equal("depsDir/idx"))
+				Expect(s.ProfileDir()).To(Equal("buildDir/.profile.d"))
 			})
 		})
 
@@ -91,6 +99,16 @@ var _ = Describe("Stager", func() {
 				Expect(s.CacheDir()).To(Equal("cacheDir"))
 				Expect(s.DepsIdx()).To(Equal(""))
 				Expect(s.DepDir()).To(Equal(""))
+				Expect(s.ProfileDir()).To(Equal("buildDir/.profile.d"))
+			})
+		})
+
+		Context("A profile.d dir is provided", func() {
+			It("sets ProfileDir", func() {
+				args = []string{"buildDir", "cacheDir", "depsDir", "idx", "rootProfileD"}
+				s = libbuildpack.NewStager(args, logger, manifest)
+				Expect(err).To(BeNil())
+				Expect(s.ProfileDir()).To(Equal("rootProfileD"))
 			})
 		})
 	})
@@ -277,6 +295,18 @@ var _ = Describe("Stager", func() {
 			Expect(err).To(BeNil())
 			Expect(string(data)).To(Equal("yyy"))
 		})
+
+		It("overwrites existing links", func() {
+			Expect(os.MkdirAll(filepath.Join(s.DepDir(), "include"), 0755)).To(Succeed())
+			Expect(os.Symlink(filepath.Join(destDir, "thing2"), filepath.Join(s.DepDir(), "include", "thing1"))).To(Succeed())
+
+			err := s.LinkDirectoryInDepDir(destDir, "include")
+			Expect(err).To(BeNil())
+
+			link, err := os.Readlink(filepath.Join(s.DepDir(), "include", "thing1"))
+			Expect(err).To(BeNil())
+			Expect(link).To(Equal("../../../" + path.Base(destDir) + "/thing1"))
+		})
 	})
 
 	Describe("WriteProfileD", func() {
@@ -392,7 +422,7 @@ var _ = Describe("Stager", func() {
 			var envVars = map[string]string{}
 
 			BeforeEach(func() {
-				vars := []string{"PATH", "LD_LIBRARY_PATH", "INCLUDE_PATH", "CPATH", "CPPPATH", "PKG_CONFIG_PATH", "ENV_VAR"}
+				vars := []string{"PATH", "LD_LIBRARY_PATH", "LIBRARY_PATH", "INCLUDE_PATH", "CPATH", "CPPPATH", "PKG_CONFIG_PATH", "ENV_VAR"}
 
 				for _, envVar := range vars {
 					envVars[envVar] = os.Getenv(envVar)
@@ -421,6 +451,14 @@ var _ = Describe("Stager", func() {
 
 				newPath := os.Getenv("LD_LIBRARY_PATH")
 				Expect(newPath).To(Equal(fmt.Sprintf("%s/02/lib:%s/01/lib:existing_LD_LIBRARY_PATH", depsDir, depsDir)))
+			})
+
+			It("sets LIBRARY_PATH based on the supplied deps", func() {
+				err = s.SetStagingEnvironment()
+				Expect(err).To(BeNil())
+
+				newPath := os.Getenv("LIBRARY_PATH")
+				Expect(newPath).To(Equal(fmt.Sprintf("%s/02/lib:%s/01/lib:existing_LIBRARY_PATH", depsDir, depsDir)))
 			})
 
 			It("sets INCLUDE_PATH based on the supplied deps", func() {
@@ -485,6 +523,14 @@ var _ = Describe("Stager", func() {
 					Expect(newPath).To(Equal(fmt.Sprintf("%s/02/lib:%s/01/lib", depsDir, depsDir)))
 				})
 
+				It("sets LIBRARY_PATH based on the supplied deps", func() {
+					err = s.SetStagingEnvironment()
+					Expect(err).To(BeNil())
+
+					newPath := os.Getenv("LIBRARY_PATH")
+					Expect(newPath).To(Equal(fmt.Sprintf("%s/02/lib:%s/01/lib", depsDir, depsDir)))
+				})
+
 				It("sets INCLUDE_PATH based on the supplied deps", func() {
 					err = s.SetStagingEnvironment()
 					Expect(err).To(BeNil())
@@ -524,23 +570,24 @@ var _ = Describe("Stager", func() {
 				err = s.SetLaunchEnvironment()
 				Expect(err).To(BeNil())
 
-				contents, err := ioutil.ReadFile(filepath.Join(buildDir, ".profile.d", "000_multi-supply.sh"))
+				contents, err := ioutil.ReadFile(filepath.Join(profileDir, "000_multi-supply.sh"))
 				Expect(err).To(BeNil())
 
 				Expect(string(contents)).To(ContainSubstring(`export PATH=$DEPS_DIR/01/bin:$DEPS_DIR/00/bin$([[ ! -z "${PATH:-}" ]] && echo ":$PATH")`))
 				Expect(string(contents)).To(ContainSubstring(`export LD_LIBRARY_PATH=$DEPS_DIR/02/lib:$DEPS_DIR/01/lib$([[ ! -z "${LD_LIBRARY_PATH:-}" ]] && echo ":$LD_LIBRARY_PATH")`))
+				Expect(string(contents)).To(ContainSubstring(`export LIBRARY_PATH=$DEPS_DIR/02/lib:$DEPS_DIR/01/lib$([[ ! -z "${LIBRARY_PATH:-}" ]] && echo ":$LIBRARY_PATH")`))
 			})
 
 			It("copies scripts from <deps-dir>/<idx>/profile.d to the .profile.d directory, prepending <idx>", func() {
 				err = s.SetLaunchEnvironment()
 				Expect(err).To(BeNil())
 
-				contents, err := ioutil.ReadFile(filepath.Join(buildDir, ".profile.d", "00_supplied-script.sh"))
+				contents, err := ioutil.ReadFile(filepath.Join(profileDir, "00_supplied-script.sh"))
 				Expect(err).To(BeNil())
 
 				Expect(string(contents)).To(Equal("first"))
 
-				contents, err = ioutil.ReadFile(filepath.Join(buildDir, ".profile.d", "01_supplied-script.sh"))
+				contents, err = ioutil.ReadFile(filepath.Join(profileDir, "01_supplied-script.sh"))
 				Expect(err).To(BeNil())
 
 				Expect(string(contents)).To(Equal("second"))

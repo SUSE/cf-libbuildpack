@@ -1,9 +1,11 @@
 package libbuildpack
 
 import (
+	"crypto/md5"
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -29,7 +31,7 @@ type DeprecationDate struct {
 type ManifestEntry struct {
 	Dependency Dependency `yaml:",inline"`
 	URI        string     `yaml:"uri"`
-	MD5        string     `yaml:"md5"`
+	SHA256     string     `yaml:"sha256"`
 	CFStacks   []string   `yaml:"cf_stacks"`
 }
 
@@ -141,13 +143,13 @@ func (m *Manifest) CheckStackSupport() error {
 }
 
 func (m *Manifest) DefaultVersion(depName string) (Dependency, error) {
-	var defaultVersion Dependency
+	var defaultVersion string
 	var err error
 	numDefaults := 0
 
-	for _, dep := range m.DefaultVersions {
-		if depName == dep.Name {
-			defaultVersion = dep
+	for _, defaultDep := range m.DefaultVersions {
+		if depName == defaultDep.Name {
+			defaultVersion = defaultDep.Version
 			numDefaults++
 		}
 	}
@@ -163,7 +165,15 @@ func (m *Manifest) DefaultVersion(depName string) (Dependency, error) {
 		return Dependency{}, err
 	}
 
-	return defaultVersion, nil
+	depVersions := m.AllDependencyVersions(depName)
+	highestVersion, err := FindMatchingVersion(defaultVersion, depVersions)
+
+	if err != nil {
+		m.log.Error(defaultVersionsError)
+		return Dependency{}, err
+	}
+
+	return Dependency{Name: depName, Version: highestVersion}, nil
 }
 
 func (m *Manifest) InstallDependency(dep Dependency, outputDir string) error {
@@ -195,6 +205,10 @@ func (m *Manifest) InstallDependency(dep Dependency, outputDir string) error {
 		return err
 	}
 
+	if strings.HasSuffix(entry.URI, ".sh") {
+		return os.Rename(tmpFile, outputDir)
+	}
+
 	err = os.MkdirAll(outputDir, 0755)
 	if err != nil {
 		return err
@@ -212,7 +226,7 @@ func (m *Manifest) warnNewerPatch(dep Dependency) error {
 
 	v, err := semver.NewVersion(dep.Version)
 	if err != nil {
-		return err
+		return nil
 	}
 
 	constraint := fmt.Sprintf("%d.%d.x", v.Major(), v.Minor())
@@ -229,26 +243,36 @@ func (m *Manifest) warnNewerPatch(dep Dependency) error {
 }
 
 func (m *Manifest) warnEndOfLife(dep Dependency) error {
+	matchVersion := func(versionLine, depVersion string) bool {
+		return versionLine == depVersion
+	}
+
 	v, err := semver.NewVersion(dep.Version)
-	if err != nil {
-		return err
+	if err == nil {
+		matchVersion = func(versionLine, depVersion string) bool {
+			constraint, err := semver.NewConstraint(versionLine)
+			if err != nil {
+				return false
+			}
+
+			return constraint.Check(v)
+		}
 	}
 
 	for _, deprecation := range m.Deprecations {
 		if deprecation.Name != dep.Name {
 			continue
 		}
-
-		versionLine, err := semver.NewConstraint(deprecation.VersionLine)
-		if err != nil {
-			return err
+		if !matchVersion(deprecation.VersionLine, dep.Version) {
+			continue
 		}
 
 		eolTime, err := time.Parse(dateFormat, deprecation.Date)
 		if err != nil {
 			return err
 		}
-		if versionLine.Check(v) && eolTime.Sub(m.currentTime) < thirtyDays {
+
+		if eolTime.Sub(m.currentTime) < thirtyDays {
 			m.log.Warning(endOfLifeWarning(dep.Name, deprecation.VersionLine, deprecation.Date, deprecation.Link))
 		}
 	}
@@ -266,9 +290,16 @@ func (m *Manifest) FetchDependency(dep Dependency, outputFile string) error {
 		return err
 	}
 
-	if m.isCached() {
-		r := strings.NewReplacer("/", "_", ":", "_", "?", "_", "&", "_")
-		source := filepath.Join(m.manifestRootDir, "dependencies", r.Replace(filteredURI))
+	if m.IsCached() {
+		source := filepath.Join(m.manifestRootDir, "dependencies", fmt.Sprintf("%x", md5.Sum([]byte(entry.URI))), path.Base(entry.URI))
+		exists, err := FileExists(source)
+		if err != nil {
+			m.log.Warning("Error determining if cached file exists: %s", err.Error())
+		}
+		if !exists {
+			r := strings.NewReplacer("/", "_", ":", "_", "?", "_", "&", "_")
+			source = filepath.Join(m.manifestRootDir, "dependencies", r.Replace(filteredURI))
+		}
 		m.log.Info("Copy [%s]", source)
 		err = CopyFile(source, outputFile)
 	} else {
@@ -279,7 +310,7 @@ func (m *Manifest) FetchDependency(dep Dependency, outputFile string) error {
 		return err
 	}
 
-	err = checkMD5(outputFile, entry.MD5)
+	err = checkSha256(outputFile, entry.SHA256)
 	if err != nil {
 		os.Remove(outputFile)
 		return err
@@ -336,7 +367,7 @@ func (m *Manifest) getEntry(dep Dependency) (*ManifestEntry, error) {
 	return nil, fmt.Errorf("dependency %s %s not found", dep.Name, dep.Version)
 }
 
-func (m *Manifest) isCached() bool {
+func (m *Manifest) IsCached() bool {
 	dependenciesDir := filepath.Join(m.manifestRootDir, "dependencies")
 
 	isCached, err := FileExists(dependenciesDir)

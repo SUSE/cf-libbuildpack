@@ -10,12 +10,13 @@ import (
 )
 
 type Stager struct {
-	buildDir string
-	cacheDir string
-	depsDir  string
-	depsIdx  string
-	manifest *Manifest
-	log      *Logger
+	buildDir   string
+	cacheDir   string
+	depsDir    string
+	depsIdx    string
+	profileDir string
+	manifest   *Manifest
+	log        *Logger
 }
 
 func NewStager(args []string, logger *Logger, manifest *Manifest) *Stager {
@@ -23,25 +24,40 @@ func NewStager(args []string, logger *Logger, manifest *Manifest) *Stager {
 	cacheDir := args[1]
 	depsDir := ""
 	depsIdx := ""
+	profileDir := ""
 
 	if len(args) >= 4 {
 		depsDir = args[2]
 		depsIdx = args[3]
 	}
+	if len(args) >= 5 && args[4] != "" {
+		profileDir = args[4]
+	} else {
+		profileDir = filepath.Join(buildDir, ".profile.d")
+	}
 
 	s := &Stager{buildDir: buildDir,
-		cacheDir: cacheDir,
-		depsDir:  depsDir,
-		depsIdx:  depsIdx,
-		manifest: manifest,
-		log:      logger,
+		cacheDir:   cacheDir,
+		depsDir:    depsDir,
+		depsIdx:    depsIdx,
+		profileDir: profileDir,
+		manifest:   manifest,
+		log:        logger,
 	}
 
 	return s
 }
 
+func (s *Stager) Logger() *Logger {
+	return s.log
+}
+
 func (s *Stager) DepDir() string {
 	return filepath.Join(s.depsDir, s.depsIdx)
+}
+
+func (s *Stager) ProfileDir() string {
+	return s.profileDir
 }
 
 func (s *Stager) WriteConfigYml(config interface{}) error {
@@ -94,6 +110,11 @@ func (s *Stager) LinkDirectoryInDepDir(destDir, depSubDir string) error {
 		relPath, err := filepath.Rel(srcDir, filepath.Join(destDir, file.Name()))
 		if err != nil {
 			return err
+		}
+
+		destPath := filepath.Join(srcDir, file.Name())
+		if _, err := os.Lstat(destPath); err == nil {
+			os.Remove(destPath)
 		}
 
 		if err := os.Symlink(relPath, filepath.Join(srcDir, file.Name())); err != nil {
@@ -190,6 +211,7 @@ func (s *Stager) DepsIdx() string {
 var stagingEnvVarDirs = map[string]string{
 	"PATH":            "bin",
 	"LD_LIBRARY_PATH": "lib",
+	"LIBRARY_PATH":    "lib",
 	"INCLUDE_PATH":    "include",
 	"CPATH":           "include",
 	"CPPPATH":         "include",
@@ -199,6 +221,7 @@ var stagingEnvVarDirs = map[string]string{
 var launchEnvVarDirs = map[string]string{
 	"PATH":            "bin",
 	"LD_LIBRARY_PATH": "lib",
+	"LIBRARY_PATH":    "lib",
 }
 
 func (s *Stager) SetStagingEnvironment() error {
@@ -261,11 +284,11 @@ func (s *Stager) SetLaunchEnvironment() error {
 		}
 	}
 
-	if err := os.MkdirAll(filepath.Join(s.buildDir, ".profile.d"), 0755); err != nil {
+	if err := os.MkdirAll(s.profileDir, 0755); err != nil {
 		return err
 	}
 
-	scriptLocation := filepath.Join(s.buildDir, ".profile.d", "000_multi-supply.sh")
+	scriptLocation := filepath.Join(s.ProfileDir(), "000_multi-supply.sh")
 	if err := writeToFile(strings.NewReader(scriptContents), scriptLocation, 0755); err != nil {
 		return err
 	}
@@ -291,7 +314,7 @@ func (s *Stager) SetLaunchEnvironment() error {
 		for _, file := range files {
 			if file.Mode().IsRegular() {
 				src := filepath.Join(dir, file.Name())
-				dest := filepath.Join(s.buildDir, ".profile.d", depsIdx+"_"+file.Name())
+				dest := filepath.Join(s.profileDir, depsIdx+"_"+file.Name())
 
 				if err := CopyFile(src, dest); err != nil {
 					return err
